@@ -38,6 +38,7 @@ async def invoke_model(input_model: InputModel):
             raise ValueError("Missing 'topic' in request payload")
         
         result = gemini_model.invoke(topic)  # Call LLM
+        print(result)
         return {"output": result}
 
     except ValueError as ve:
