@@ -9,10 +9,10 @@ from langchain_chroma import Chroma
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
-
+import pandas as pd
 
 class ChatGemini(Runnable):
-    # Fixed paths for PDFs and vectorstore
+    # Fixed paths for PDFs, CSVs, and vectorstore
     PDF_DIRECTORY = "C:\\Data"
     VECTORSTORE_PATH = "C://Chroma_Storage"
 
@@ -41,6 +41,14 @@ class ChatGemini(Runnable):
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         return text_splitter.split_documents(docs)
 
+    @staticmethod
+    def load_and_split_csv(file_path):
+        """Load and split CSV data into smaller chunks."""
+        data = pd.read_csv(file_path)
+        all_text = "\n".join(data.astype(str).apply(lambda x: " ".join(x), axis=1))
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        return text_splitter.split_text(all_text)
+
     def _initialize_vectorstore(self):
         """Create or load a Chroma vectorstore."""
         docs = []
@@ -48,11 +56,16 @@ class ChatGemini(Runnable):
         if not os.path.exists(self.VECTORSTORE_PATH):
             print("Creating vectorstore...")
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [
-                    executor.submit(self.load_and_split_pdf, os.path.join(self.PDF_DIRECTORY, filename))
-                    for filename in os.listdir(self.PDF_DIRECTORY)
-                    if filename.endswith(".pdf")
-                ]
+                futures = []
+
+                # Load and process PDF files
+                for filename in os.listdir(self.PDF_DIRECTORY):
+                    file_path = os.path.join(self.PDF_DIRECTORY, filename)
+                    if filename.endswith(".pdf"):
+                        futures.append(executor.submit(self.load_and_split_pdf, file_path))
+                    elif filename.endswith(".csv"):
+                        futures.append(executor.submit(self.load_and_split_csv, file_path))
+
                 for future in concurrent.futures.as_completed(futures):
                     docs.extend(future.result())
 
@@ -98,4 +111,3 @@ class ChatGemini(Runnable):
         """Invoke the process_query method for user interaction."""
         print("Processing query with RAG...")
         return self.process_query(query)
-
