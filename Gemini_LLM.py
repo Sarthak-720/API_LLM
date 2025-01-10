@@ -1,75 +1,57 @@
-from langchain.schema import AIMessage, ChatMessage, HumanMessage, ChatResult
-import google.generativeai as genai
-from langchain_core.runnables import Runnable
-import os
 import pandas as pd
+import base64
+import json
+import os
+import google.generativeai as genai
 
-
-class ChatGemini(Runnable):
-    # Predetermined path for the CSV file
-    CSV_PATH = "path_to_your_file.csv"
-
+class ChatGemini:
     def __init__(self, model_name: str, credentials_path: str, generation_config: dict):
-        """
-        Initialize the ChatGemini class with an LLM and a predetermined CSV file.
-
-        Args:
-            model_name (str): The name of the LLM model.
-            credentials_path (str): Path to the Google credentials file.
-            generation_config (dict): Configuration for the LLM generation.
-        """
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-
-        # Initialize the Google Generative AI model
+        genai.configure(api_key="AIzaSyCdCy_pq1b4m3OT2OfNWQr4XJ46LD4xVqM")  # Replace with your API key
         self.model = genai.GenerativeModel(
-            model_name=model_name,
+            model_name=model_name, 
             generation_config=generation_config
         )
 
-        # Load and preprocess the predetermined CSV file
-        self.data = self._load_and_preprocess_csv()
+    def invoke(self, input_data) -> dict:
+        try:
+            # Parse input
+            payload = json.loads(input_data[0].content)
+            encrypted_csv = payload.get("encrypted_csv")
+            password = payload.get("password")
+            user_task = payload.get("topic")
 
-    @staticmethod
-    def _load_and_preprocess_csv() -> pd.DataFrame:
-        """
-        Load and preprocess the CSV file from the predetermined path.
+            if not encrypted_csv or not password or not user_task:
+                raise ValueError("Missing required data")
 
-        Returns:
-            pd.DataFrame: Preprocessed DataFrame.
-        """
-        # Load the CSV file
-        data = pd.read_csv(ChatGemini.CSV_PATH)
+            # Decrypt CSV data
+            cipher = Fernet(password.encode())
+            decrypted_csv_data = cipher.decrypt(encrypted_csv.encode())
 
-        # Example preprocessing: drop missing values and reset the index
-        data = data.dropna().reset_index(drop=True)
+            # Load CSV into Pandas
+            csv_data_path = "temp_decrypted.csv"
+            with open(csv_data_path, "wb") as file:
+                file.write(decrypted_csv_data)
 
-        # Add more preprocessing steps as needed
-        return data
+            data = pd.read_csv(csv_data_path)
+            os.remove(csv_data_path)
 
-    def invoke(self, input_data: list[ChatMessage]) -> ChatResult:
-        """
-        Process the user's query with the pre-processed CSV data and the LLM.
+            # Prepare prompt
+            csv_data_str = data.to_string(index=False)
+            prompt = f"Task: {user_task}\n\nRelevant CSV Data:\n{csv_data_str}"
 
-        Args:
-            input_data (list[ChatMessage]): List of user messages.
+            # Send prompt to LLM
+            chat_session = self.start_chat_session()
+            response = chat_session.send_message(prompt)
 
-        Returns:
-            ChatResult: AI response after analyzing the data.
-        """
-        # Extract the user's query
-        prompt = "\n".join([msg.content for msg in input_data if isinstance(msg, HumanMessage)])
+            return {
+                "response": response.text,
+                "status": "success",
+            }
 
-        # Combine the preprocessed data and user query for analysis
-        llm_input = (
-            f"You are a data assistant. The following is the data extracted from a CSV file:\n"
-            f"{self.data.to_string(index=False)}\n\n"
-            f"User's request: {prompt}\n\n"
-            f"Perform the requested analysis or task based on the data."
-        )
+        except Exception as e:
+            return {"response": str(e), "status": "failed"}
 
-        # Generate a response using the LLM
-        chat_session = self.model.start_chat(history=[])
-        response = chat_session.send_message(llm_input)
+    def start_chat_session(self):
+        return self.model.start_chat(history=[])
 
-        ai_message = AIMessage(content=response.text)
-        return ChatResult(messages=[ai_message])
