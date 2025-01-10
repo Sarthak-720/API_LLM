@@ -1,12 +1,38 @@
-from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException
-from langserve import add_routes
 from Gemini_LLM import ChatGemini
+from langchain.schema.messages import HumanMessage
+from cryptography.fernet import Fernet
+import base64
+import os
+import json
+# Path to CSV and key file
+CSV_DATA_PATH = r"C:\Users\SARTHAK\Downloads\Results_lm.csv"
+KEY_FILE = "secret.key"
 
-# Define input schema for request body
-class InputModel(BaseModel):
-    input: dict
+# Key management
+def generate_key():
+    if not os.path.exists(KEY_FILE):
+        key = Fernet.generate_key()
+        with open(KEY_FILE, "wb") as key_file:
+            key_file.write(key)
 
+def load_key():
+    with open(KEY_FILE, "rb") as key_file:
+        return key_file.read()
+
+generate_key()
+key = load_key()
+cipher = Fernet(key)
+
+# Encrypt the CSV file
+def encrypt_csv(file_path):
+    with open(file_path, "rb") as file:
+        encrypted_data = cipher.encrypt(file.read())
+    return encrypted_data
+
+encrypted_csv = encrypt_csv(CSV_DATA_PATH)
+
+# FastAPI app setup
 app = FastAPI(
     title="Gemini Server",
     version="1.0",
@@ -14,38 +40,47 @@ app = FastAPI(
 )
 
 generation_config = {
-    "temperature": 0.4,
-    "top_p": 0.9,
+    "temperature": 1,
+    "top_p": 0.95,
     "top_k": 40,
-    "max_output_tokens": 2048,
+    "max_output_tokens": 8192,
     "response_mime_type": "text/plain",
 }
 gemini_model = ChatGemini(
     model_name="gemini-1.5-flash",
-    credentials_path=r"C:\Users\SARTHAK\Downloads\intern-project-446606-598b57e7913a.json",
+    credentials_path="C:\\Users\\SARTHAK\\Downloads\\gen-lang-client-0091686678-84db239ad662.json",
     generation_config=generation_config,
 )
 
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to Gemini Server"}
-
-@app.post("/invoke")
-async def invoke_model(input_model: InputModel):
+@app.post("/gemini")
+async def invoke_gemini(input: dict):
     try:
-        topic = input_model.input.get("topic")
+        topic = input.get("topic", "").strip()
+
         if not topic:
-            raise ValueError("Missing 'topic' in request payload")
-        
-        result = gemini_model.invoke(topic)  # Call LLM
-        print(result)
-        return {"output": result}
+            raise ValueError("Topic cannot be empty")
 
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=f"Invalid request: {ve}")
+        # Prepare payload
+        payload = {
+            "encrypted_csv": encrypted_csv.decode(),
+            "password": key.decode(),
+            "topic": topic
+        }
+
+        # Serialize payload as JSON
+        payload_json = json.dumps(payload)
+
+        # Send to LLM
+        result = gemini_model.invoke([HumanMessage(content=payload_json)])
+
+        response = {
+            "response": result.get("response", ""),
+            "status": result.get("status", "failed"),
+        }
+        return response
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
-
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
